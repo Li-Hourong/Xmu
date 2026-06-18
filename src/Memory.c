@@ -27,6 +27,14 @@ int load_memory(const char* filename, Memory* mem) {
     return 1;
 }
 
+static int memory_check_range(Memory *mem, uint32_t addr, uint32_t size) {
+    if (!mem || !mem->data) {
+        return 0;
+    }
+
+    return addr <= mem->size && size <= mem->size - addr;
+}
+
 // ---- read ----
 
 uint8_t memory_load8(Memory *mem, uint32_t addr) {
@@ -45,6 +53,30 @@ uint32_t memory_load32(Memory *mem, uint32_t addr) {
          | ((uint32_t)mem->data[addr + 3] << 24);
 }
 
+int memory_load8_checked(Memory *mem, uint32_t addr, uint8_t *out) {
+    if (!out || !memory_check_range(mem, addr, 1)) {
+        return 0;
+    }
+    *out = memory_load8(mem, addr);
+    return 1;
+}
+
+int memory_load16_checked(Memory *mem, uint32_t addr, uint16_t *out) {
+    if (!out || !memory_check_range(mem, addr, 2)) {
+        return 0;
+    }
+    *out = memory_load16(mem, addr);
+    return 1;
+}
+
+int memory_load32_checked(Memory *mem, uint32_t addr, uint32_t *out) {
+    if (!out || !memory_check_range(mem, addr, 4)) {
+        return 0;
+    }
+    *out = memory_load32(mem, addr);
+    return 1;
+}
+
 // ---- write ----
 
 void memory_store8(Memory *mem, uint32_t addr, uint8_t value) {
@@ -61,6 +93,30 @@ void memory_store32(Memory *mem, uint32_t addr, uint32_t value) {
     mem->data[addr + 1] = (uint8_t)((value >> 8) & 0xFF);
     mem->data[addr + 2] = (uint8_t)((value >> 16) & 0xFF);
     mem->data[addr + 3] = (uint8_t)((value >> 24) & 0xFF);
+}
+
+int memory_store8_checked(Memory *mem, uint32_t addr, uint8_t value) {
+    if (!memory_check_range(mem, addr, 1)) {
+        return 0;
+    }
+    memory_store8(mem, addr, value);
+    return 1;
+}
+
+int memory_store16_checked(Memory *mem, uint32_t addr, uint16_t value) {
+    if (!memory_check_range(mem, addr, 2)) {
+        return 0;
+    }
+    memory_store16(mem, addr, value);
+    return 1;
+}
+
+int memory_store32_checked(Memory *mem, uint32_t addr, uint32_t value) {
+    if (!memory_check_range(mem, addr, 4)) {
+        return 0;
+    }
+    memory_store32(mem, addr, value);
+    return 1;
 }
 
 // ---- debug ----

@@ -6,6 +6,15 @@ CPU* Create_CPU(){
     cpu->inst = 0;
     cpu->addr = 0;
     cpu->halted = 0;
+    cpu->mcause = 0;
+    cpu->mepc = 0;
+    cpu->mtvec = 0;
+    cpu->mtval = 0;
+    cpu->mstatus = 0;
+    cpu->mie = 0;
+    cpu->halt_on_ebreak = 1;
+    
+    cpu->trap_pending = 0;
     memset(cpu->reg, 0, sizeof(cpu->reg));
     cpu->fetch = Fetch;
     cpu->execute = Execute;
@@ -18,9 +27,31 @@ void Free_CPU(CPU* cpu){
 
 void Run_CPU(CPU* cpu, Memory* mem) {
     while (!cpu->halted) {
+        cpu->trap_pending = 0;
         cpu->fetch(cpu, mem);
+        if (cpu->trap_pending) {
+            continue;
+        }
         cpu->execute(cpu, mem);
     }
+}
+
+//---------- utils ----------
+
+static void raise_trap_at(CPU *cpu, uint32_t cause, uint32_t tval, uint32_t fault_pc) {
+    cpu->mcause = cause;
+    cpu->mtval = tval;
+    cpu->mepc = fault_pc;
+    cpu->pc = cpu->mtvec;
+    cpu->trap_pending = 1;
+}
+
+void raise_trap(CPU *cpu, uint32_t cause, uint32_t tval) {
+    raise_trap_at(cpu, cause, tval, cpu->pc - 4);
+}
+
+static int is_aligned(uint32_t addr, uint32_t alignment) {
+    return (addr & (alignment - 1)) == 0;
 }
 
 static int32_t sign_extend(uint32_t value, int bits) {
@@ -57,7 +88,20 @@ static int32_t imm_j(uint32_t inst) {
 
 
 void Fetch(CPU *cpu, Memory *mem) {
-    cpu->inst = memory_load32(mem, cpu->pc);
+    uint32_t inst;
+    uint32_t fault_pc = cpu->pc;
+
+    if (!is_aligned(cpu->pc, 4)) {
+        raise_trap_at(cpu, TRAP_INST_MISALIGNED, cpu->pc, fault_pc);
+        return;
+    }
+
+    if (!memory_load32_checked(mem, cpu->pc, &inst)) {
+        raise_trap_at(cpu, TRAP_INST_FAULT, cpu->pc, fault_pc);
+        return;
+    }
+
+    cpu->inst = inst;
     cpu->pc += 4;
 }
 
@@ -121,28 +165,72 @@ void Execute(CPU *cpu, Memory *mem) {
                     }
                 break;
                 default:
+                    raise_trap(cpu, TRAP_ILLEGAL_INST, cpu->inst);
                 break;
             }
         break;
         case 0b0000011: // I-type load
             cpu->addr = cpu->reg[rs1] + (uint32_t)imm_i(cpu->inst);
             switch (funct3) {
-                case 0b000: // LB
-                    cpu->reg[rd] = (uint32_t)sign_extend(memory_load8(mem, cpu->addr), 8);
+                case 0b000: { // LB
+                    uint8_t value;
+                    if (!memory_load8_checked(mem, cpu->addr, &value)) {
+                        raise_trap(cpu, TRAP_LOAD_FAULT, cpu->addr);
+                        return;
+                    }
+                    cpu->reg[rd] = (uint32_t)sign_extend(value, 8);
                 break;
-                case 0b001: // LH
-                    cpu->reg[rd] = (uint32_t)sign_extend(memory_load16(mem, cpu->addr), 16);
+                }
+                case 0b001: { // LH
+                    uint16_t value;
+                    if (!is_aligned(cpu->addr, 2)) {
+                        raise_trap(cpu, TRAP_LOAD_MISALIGNED, cpu->addr);
+                        return;
+                    }
+                    if (!memory_load16_checked(mem, cpu->addr, &value)) {
+                        raise_trap(cpu, TRAP_LOAD_FAULT, cpu->addr);
+                        return;
+                    }
+                    cpu->reg[rd] = (uint32_t)sign_extend(value, 16);
                 break;
-                case 0b010: // LW
-                    cpu->reg[rd] = memory_load32(mem, cpu->addr);
+                }
+                case 0b010: { // LW
+                    uint32_t value;
+                    if (!is_aligned(cpu->addr, 4)) {
+                        raise_trap(cpu, TRAP_LOAD_MISALIGNED, cpu->addr);
+                        return;
+                    }
+                    if (!memory_load32_checked(mem, cpu->addr, &value)) {
+                        raise_trap(cpu, TRAP_LOAD_FAULT, cpu->addr);
+                        return;
+                    }
+                    cpu->reg[rd] = value;
                 break;
-                case 0b100: // LBU
-                    cpu->reg[rd] = memory_load8(mem, cpu->addr);
+                }
+                case 0b100: { // LBU
+                    uint8_t value;
+                    if (!memory_load8_checked(mem, cpu->addr, &value)) {
+                        raise_trap(cpu, TRAP_LOAD_FAULT, cpu->addr);
+                        return;
+                    }
+                    cpu->reg[rd] = value;
                 break;
-                case 0b101: // LHU
-                    cpu->reg[rd] = memory_load16(mem, cpu->addr);
+                }
+                case 0b101: { // LHU
+                    uint16_t value;
+                    if (!is_aligned(cpu->addr, 2)) {
+                        raise_trap(cpu, TRAP_LOAD_MISALIGNED, cpu->addr);
+                        return;
+                    }
+                    if (!memory_load16_checked(mem, cpu->addr, &value)) {
+                        raise_trap(cpu, TRAP_LOAD_FAULT, cpu->addr);
+                        return;
+                    }
+                    cpu->reg[rd] = value;
                 break;
+                }
                 default:
+                    raise_trap(cpu, TRAP_ILLEGAL_INST, cpu->inst);
                 break;
             }
         break;
@@ -151,15 +239,33 @@ void Execute(CPU *cpu, Memory *mem) {
             cpu->addr = cpu->reg[rs1] + (uint32_t)imm_s(cpu->inst);
             switch (funct3) {
                 case 0b000: // SB
-                    memory_store8(mem, cpu->addr, (uint8_t)(cpu->reg[rs2] & 0xFF));
+                    if (!memory_store8_checked(mem, cpu->addr, (uint8_t)(cpu->reg[rs2] & 0xFF))) {
+                        raise_trap(cpu, TRAP_STORE_FAULT, cpu->addr);
+                        return;
+                    }
                 break;
                 case 0b001: // SH
-                    memory_store16(mem, cpu->addr, (uint16_t)(cpu->reg[rs2] & 0xFFFF));
+                    if (!is_aligned(cpu->addr, 2)) {
+                        raise_trap(cpu, TRAP_STORE_MISALIGNED, cpu->addr);
+                        return;
+                    }
+                    if (!memory_store16_checked(mem, cpu->addr, (uint16_t)(cpu->reg[rs2] & 0xFFFF))) {
+                        raise_trap(cpu, TRAP_STORE_FAULT, cpu->addr);
+                        return;
+                    }
                 break;
                 case 0b010: // SW
-                    memory_store32(mem, cpu->addr, cpu->reg[rs2]);
+                    if (!is_aligned(cpu->addr, 4)) {
+                        raise_trap(cpu, TRAP_STORE_MISALIGNED, cpu->addr);
+                        return;
+                    }
+                    if (!memory_store32_checked(mem, cpu->addr, cpu->reg[rs2])) {
+                        raise_trap(cpu, TRAP_STORE_FAULT, cpu->addr);
+                        return;
+                    }
                 break;
                 default:
+                    raise_trap(cpu, TRAP_ILLEGAL_INST, cpu->inst);
                 break;
             }
         break;
@@ -197,6 +303,7 @@ void Execute(CPU *cpu, Memory *mem) {
                     }
                 break;
                 default:
+                    raise_trap(cpu, TRAP_ILLEGAL_INST, cpu->inst);
                 break;
             }
         break;
@@ -211,11 +318,21 @@ void Execute(CPU *cpu, Memory *mem) {
             cpu->pc += imm_j(cpu->inst) - 4;
         break;
         case 0b1110011: // SYSTEM
-            if (cpu->inst == 0x00100073u) { // EBREAK
-                cpu->halted = 1;
+            if (cpu->inst == 0x00100073u) {
+                if (cpu->halt_on_ebreak) {
+                    cpu->halted = 1;
+                } else {
+                    raise_trap(cpu, TRAP_BREAKPOINT, 0);
+                }
+                return;
+            }
+            if (cpu->inst == 0x00000073u) {
+                raise_trap(cpu, TRAP_ECALL_M, 0);
+                return;
             }
         break;
         default:
+            raise_trap(cpu, TRAP_ILLEGAL_INST, cpu->inst);
         break;
     }
 
