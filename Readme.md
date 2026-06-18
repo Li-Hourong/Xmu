@@ -220,7 +220,7 @@ inst = 0x00000073 -> ecall
 inst = 0x00100073 -> ebreak
 ```
 
-CSR 指令属于 `Zicsr` 扩展，不属于最小 RV32I 执行核心的必要部分。
+CSR 指令属于 `Zicsr` 扩展，不属于最小 RV32I 执行核心的必要部分（详见后文「CSR 与特权级」章节）。
 
 ## Execute 实现要点
 
@@ -253,6 +253,122 @@ addi x0, x0, 0
 ```
 
 虚拟 CPU 只需要解码真实机器指令，不需要直接支持汇编伪指令。
+
+## CSR 与特权级（Privileged ISA）
+
+基础整数指令属于 Unprivileged ISA。CSR 寄存器、异常/中断、`mret` 等属于 Privileged ISA。本项目当前已实现同步异常的入口（`raise_trap` 设置 `mcause`/`mepc`/`mtval`），CSR 指令、`mret` 与 `mstatus` 的维护正在逐步补全。
+
+### CSR 地址编码
+
+CSR 地址是 12 位（`0x000`–`0xFFF`），但**不是从 0 递增的编号，而是带标签的结构化字段**：高位是分类标签，只有低位是组内序号，因此地址看起来零散、不从 0 开始。
+
+| 字段 | 含义 | 取值 |
+|---|---|---|
+| `[11:10]` | 访问权限 | `11`=只读；`00/01/10`=可读写 |
+| `[9:8]` | 最低可访问特权级 | `00`=User, `01`=Supervisor, `10`=Hypervisor, `11`=Machine |
+| `[7:4]` | 组别 | 标准寄存器一般为 `0` |
+| `[3:0]` | 组内序号 | 真正递增的部分 |
+
+`[11:10]=11` 表示只读，可由地址自证：用户只读影子计数器 `cycle`（`0xC00`，`[11:10]=11`），而机器可写的 `mcycle`（`0xB00`，`[11:10]=10`）。
+
+解码示例：
+
+| CSR | 地址（12 位） | `[11:10]` | `[9:8]` | 解读 |
+|---|---|---|---|---|
+| `mstatus` | `0x300` = `0011 0000 0000` | `00` RW | `11` M | 标准、机器态、可读写 |
+| `mie` | `0x304` | `00` | `11` | 序号 4 |
+| `mtvec` | `0x305` | `00` | `11` | 序号 5 |
+| `mscratch` | `0x340` | `00` | `11` | 序号 0x40 |
+| `mhartid` | `0xF14` = `1111 0001 0100` | `11` 只读 | `11` M | 只读、机器态 |
+
+所有可读写的 M-mode 寄存器集中在 `0x3xx`，因为 `0x3 = 0011 = [11:10][9:8] = 可读写(00) + Machine(11)`。桶内大量留白留给规范中可选/未实现的寄存器（`medeleg`/`mideleg`、PMP、`mcounteren` 等），所以地址不连续。
+
+### CSR 指令（Zicsr 扩展）
+
+6 条指令，`opcode = SYSTEM (0x73)`，用 `funct3` 区分，操作对象是 12 位 CSR 地址 `inst[31:20]`：
+
+| funct3 | 指令 | 操作 |
+|---|---|---|
+| `001` | `csrrw`  | `t=csr; csr=rs1;        rd=t` |
+| `010` | `csrrs`  | `t=csr; if(rs1)  csr |= rs1;  rd=t` |
+| `011` | `csrrc`  | `t=csr; if(rs1)  csr &= ~rs1; rd=t` |
+| `101` | `csrrwi` | 同 `csrrw`，源操作数为 `zimm`（5 位零扩展） |
+| `110` | `csrrsi` | 同 `csrrs`，源操作数为 `zimm` |
+| `111` | `csrrci` | 同 `csrrc`，源操作数为 `zimm` |
+
+三条语义要点：
+
+- **零即不写**：`csrrs/c/csi/ci` 当 `rs1`（或 `zimm`）为 0 时**只读不写**。
+- **`rd=x0` 即不读**：`csrrw/wi` 当 `rd=x0` 时**不读**（避免只读 CSR 的读副作用）。
+- 访问**不存在**的 CSR，或**写只读** CSR（`[11:10]=11`）→ `illegal instruction`。
+
+伪指令：`csrr rd, csr` = `csrrs rd, csr, x0`；`csrw csr, rs` = `csrrw x0, csr, rs`。
+
+### M-mode 关键 CSR 寄存器
+
+trap 状态（本项目在 `CPU` 结构中维护）：
+
+| 地址 | 名 | 用途 | 读写 |
+|---|---|---|---|
+| `0x300` | `mstatus` | 全局状态，关键是中断位 | RW |
+| `0x304` | `mie` | 中断使能：bit3=MSIE、bit7=MTIE、bit11=MEIE | RW |
+| `0x305` | `mtvec` | trap 入口基址；低 2 位=模式（`0`=direct，`1`=vectored） | RW |
+| `0x340` | `mscratch` | M-mode 专用 scratch | RW |
+| `0x341` | `mepc` | trap 返回的 PC | RW |
+| `0x342` | `mcause` | trap 原因：bit31=1 中断 / =0 异常；低 31 位=code | RW |
+| `0x343` | `mtval` | trap 附加值（非法指令编码 / 出错地址） | RW |
+| `0x344` | `mip` | 中断挂起：bit3=MSIP、bit7=MTIP、bit11=MEIP | 部分 RW |
+
+只读常量：
+
+| 地址 | 名 | 返回值 |
+|---|---|---|
+| `0x301` | `misa` | 支持的扩展（最小实现返回 `0`） |
+| `0xf14` | `mhartid` | hart 编号（单核返回 `0`） |
+
+> S-mode / 分页相关（`satp=0x180`、`sstatus`、`scause` 等）属于后续阶段。
+
+### mstatus 关键位
+
+| 位 | 名 | 含义 |
+|---|---|---|
+| `3` | `MIE` | M 全局中断使能 |
+| `7` | `MPIE` | trap 前的 `MIE`（进 trap 时被保存） |
+| `12:11` | `MPP` | trap 前的特权级（本项目仅 M-mode，恒 `11`） |
+
+### trap 进出语义
+
+进入 trap（`raise_trap`）：
+
+```text
+mepc    <- fault_pc          （异常=出错指令；中断=下一条）
+mcause  <- code | （中断? 0x80000000 : 0）
+mtval   <- tval
+MPIE    <- MIE               （保存）
+MIE     <- 0                 （关中断）
+MPP     <- 11
+pc      <- mtvec
+```
+
+退出 trap（`mret`，编码 `0x30200073`）：
+
+```text
+pc      <- mepc
+MIE     <- MPIE              （恢复）
+MPIE    <- 1
+```
+
+### mie / mip 中断位与中断 cause
+
+| bit | `mie`（使能） | `mip`（挂起） | 中断类型 | cause（中断） |
+|---|---|---|---|---|
+| `3` | MSIE | MSIP | M 软件中断 | `3` |
+| `7` | MTIE | MTIP | M 定时器中断 | `7` |
+| `11` | MEIE | MEIP | M 外部中断 | `11` |
+
+异步中断的检测点在 `Run_CPU` 循环中 `fetch` 之前：若 `(mip & mie)` 非空且 `mstatus.MIE==1`，按优先级（MEI > MSI > MTI）选一个中断，`mcause = 0x80000000 | code` 后走 trap 流程（`mepc` 存"下一条"未执行指令）。
+
+异常 cause code 见 `common.h` 的 `TrapCause` 枚举。
 
 ## 程序停止约定
 

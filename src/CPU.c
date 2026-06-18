@@ -12,6 +12,8 @@ CPU* Create_CPU(){
     cpu->mtval = 0;
     cpu->mstatus = 0;
     cpu->mie = 0;
+    cpu->mip = 0;
+    cpu->mscratch = 0;
     cpu->halt_on_ebreak = 1;
     
     cpu->trap_pending = 0;
@@ -312,6 +314,10 @@ void Execute(CPU *cpu, Memory *mem) {
         break;
         case 0b0010111: // U-type AUIPC
             cpu->reg[rd] = cpu->pc - 4 + imm_u(cpu->inst);
+        break;
+        case 0b1100111: // I-type JALR
+            cpu->reg[rd] = cpu->pc; // JALR
+            cpu->pc = (cpu->reg[rs1] + (uint32_t)imm_i(cpu->inst)) & ~1u;
         break;
         case 0b1101111: // J-type
             cpu->reg[rd] = cpu->pc; // JAL

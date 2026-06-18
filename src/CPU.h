@@ -17,6 +17,8 @@ struct CPU {
     uint32_t mtval;
     uint32_t mstatus;
     uint32_t mie;
+    uint32_t mip;
+    uint32_t mscratch;
     uint8_t trap_pending;
 
     uint8_t halted;
