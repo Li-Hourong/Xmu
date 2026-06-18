@@ -256,7 +256,7 @@ addi x0, x0, 0
 
 ## CSR 与特权级（Privileged ISA）
 
-基础整数指令属于 Unprivileged ISA。CSR 寄存器、异常/中断、`mret` 等属于 Privileged ISA。本项目当前已实现同步异常的入口（`raise_trap` 设置 `mcause`/`mepc`/`mtval`），CSR 指令、`mret` 与 `mstatus` 的维护正在逐步补全。
+基础整数指令属于 Unprivileged ISA。CSR 寄存器、异常/中断、`mret` 等属于 Privileged ISA。本项目当前已实现同步异常的入口（`raise_trap` 设置 `mcause`/`mepc`/`mtval` 并维护 `mstatus`）、6 条 CSR 指令与 `mret`，trap 可进可出；异步中断（`mie`/`mip` 检测）尚未实现。
 
 ### CSR 地址编码
 
