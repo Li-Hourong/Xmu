@@ -253,3 +253,23 @@ addi x0, x0, 0
 ```
 
 虚拟 CPU 只需要解码真实机器指令，不需要直接支持汇编伪指令。
+
+## 程序停止约定
+
+当前虚拟 CPU 使用 RISC-V 标准 `EBREAK` 指令作为停机指令：
+
+```text
+assembly: ebreak
+machine:  0x00100073
+bytes:    73 00 10 00
+```
+
+外部程序文件被加载到内存后，`Run_CPU` 会循环执行 `fetch` 和 `execute`，直到 `Execute` 遇到 `0x00100073` 并设置 `cpu->halted = 1`。因此每个测试程序都应该在最后放一条 `ebreak`，否则 CPU 会继续从后续内存取指。
+
+默认运行方式：
+
+```sh
+./build/xmu program.bin
+```
+
+如果没有传入文件名，程序会尝试读取当前目录下的 `program.bin`。

@@ -3,14 +3,24 @@
 CPU* Create_CPU(){
     struct CPU* cpu = (struct CPU*)malloc(sizeof(struct CPU));
     cpu->pc = 0;
+    cpu->inst = 0;
+    cpu->addr = 0;
+    cpu->halted = 0;
     memset(cpu->reg, 0, sizeof(cpu->reg));
     cpu->fetch = Fetch;
     cpu->execute = Execute;
     return cpu;
 }
 
-void Shutdown_CPU(CPU* cpu){
+void Free_CPU(CPU* cpu){
     free(cpu);
+}
+
+void Run_CPU(CPU* cpu, Memory* mem) {
+    while (!cpu->halted) {
+        cpu->fetch(cpu, mem);
+        cpu->execute(cpu, mem);
+    }
 }
 
 static int32_t sign_extend(uint32_t value, int bits) {
@@ -51,8 +61,10 @@ void Fetch(CPU *cpu, Memory *mem) {
     cpu->pc += 4;
 }
 
-// TODO: implement Decode
 void Execute(CPU *cpu, Memory *mem) {
+    if (cpu->halted) {
+        return;
+    }
     uint32_t opcode = cpu->inst & 0x7f;        // [6:0]
     uint32_t rd     = (cpu->inst >> 7)  & 0x1f; // [11:7]
     uint32_t funct3 = (cpu->inst >> 12) & 0x07; // [14:12]
@@ -120,6 +132,7 @@ void Execute(CPU *cpu, Memory *mem) {
                 break;
                 case 0b001: // LH
                     cpu->reg[rd] = (uint32_t)sign_extend(memory_load16(mem, cpu->addr), 16);
+                break;
                 case 0b010: // LW
                     cpu->reg[rd] = memory_load32(mem, cpu->addr);
                 break;
@@ -145,6 +158,7 @@ void Execute(CPU *cpu, Memory *mem) {
                 break;
                 case 0b010: // SW
                     memory_store32(mem, cpu->addr, cpu->reg[rs2]);
+                break;
                 default:
                 break;
             }
@@ -186,18 +200,24 @@ void Execute(CPU *cpu, Memory *mem) {
                 break;
             }
         break;
-        case 0x0110111: // U-type LUI
+        case 0b0110111: // U-type LUI
             cpu->reg[rd] = imm_u(cpu->inst);
         break;
-        case 0x0010111: // U-type AUIPC
+        case 0b0010111: // U-type AUIPC
             cpu->reg[rd] = cpu->pc - 4 + imm_u(cpu->inst);
         break;
         case 0b1101111: // J-type
             cpu->reg[rd] = cpu->pc; // JAL
             cpu->pc += imm_j(cpu->inst) - 4;
         break;
+        case 0b1110011: // SYSTEM
+            if (cpu->inst == 0x00100073u) { // EBREAK
+                cpu->halted = 1;
+            }
+        break;
         default:
         break;
     }
 
+    cpu->reg[0] = 0;
 }

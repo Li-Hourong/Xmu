@@ -15,6 +15,18 @@ void Free_Memory(Memory* mem) {
     }
 }
 
+int load_memory(const char* filename, Memory* mem) {
+    FILE* file = fopen(filename, "rb");
+    if (!file) {
+        fprintf(stderr, "Failed to open file: %s\n", filename);
+        return 0;
+    }
+
+    fread(mem->data, sizeof(uint8_t), mem->size, file);
+    fclose(file);
+    return 1;
+}
+
 // ---- read ----
 
 uint8_t memory_load8(Memory *mem, uint32_t addr) {
@@ -53,8 +65,16 @@ void memory_store32(Memory *mem, uint32_t addr, uint32_t value) {
 
 // ---- debug ----
 
-void memory_dump(Memory *mem, uint32_t start, uint32_t end) {
-    for (uint32_t i = start; i < end; ++i) {
-        printf("%08x: %02x\n", i, mem->data[i]);
+void dump_memory(Memory *mem, uint32_t start, uint32_t end) {
+    for (uint32_t addr = start; addr < end; addr += 4) {
+        uint32_t value = 0;
+        uint32_t remaining = end - addr;
+        uint32_t bytes = remaining < 4 ? remaining : 4;
+
+        for (uint32_t offset = 0; offset < bytes; ++offset) {
+            value |= (uint32_t)mem->data[addr + offset] << (offset * 8);
+        }
+
+        printf("%08x: %08x\n", addr, value);
     }
 }
