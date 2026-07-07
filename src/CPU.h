@@ -2,7 +2,7 @@
 #define CPU_H
 
 #include "common.h"
-#include "Memory.h"
+#include "Bus.h"
 
 
 struct CPU {
@@ -24,17 +24,17 @@ struct CPU {
     uint8_t halted;
     uint8_t halt_on_ebreak;
 
-    void (*fetch)(struct CPU *cpu, Memory *mem);
-    void (*execute)(struct CPU *cpu, Memory *mem);
+    void (*fetch)(struct CPU *cpu, Bus *bus);
+    void (*execute)(struct CPU *cpu, Bus *bus);
 };
 
 typedef struct CPU CPU;
 
 struct CPU* Create_CPU();
 void Free_CPU(CPU* cpu);
-void Run_CPU(CPU* cpu, Memory* mem);
-void Fetch(CPU *cpu, Memory *mem);
-void Execute(CPU *cpu, Memory *mem);
+void Run_CPU(CPU* cpu, Bus* bus);
+void Fetch(CPU *cpu, Bus *bus);
+void Execute(CPU *cpu, Bus *bus);
 
 void raise_trap(CPU *cpu, uint32_t cause, uint32_t tval);
 

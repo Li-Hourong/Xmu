@@ -19,12 +19,12 @@ int load_memory(const char* filename, Memory* mem) {
     FILE* file = fopen(filename, "rb");
     if (!file) {
         fprintf(stderr, "Failed to open file: %s\n", filename);
-        return 0;
+        return -1;
     }
 
     fread(mem->data, sizeof(uint8_t), mem->size, file);
     fclose(file);
-    return 1;
+    return 0;
 }
 
 static int memory_check_range(Memory *mem, uint32_t addr, uint32_t size) {
@@ -55,26 +55,26 @@ uint32_t memory_load32(Memory *mem, uint32_t addr) {
 
 int memory_load8_checked(Memory *mem, uint32_t addr, uint8_t *out) {
     if (!out || !memory_check_range(mem, addr, 1)) {
-        return 0;
+        return -1;
     }
     *out = memory_load8(mem, addr);
-    return 1;
+    return 0;
 }
 
 int memory_load16_checked(Memory *mem, uint32_t addr, uint16_t *out) {
     if (!out || !memory_check_range(mem, addr, 2)) {
-        return 0;
+        return -1;
     }
     *out = memory_load16(mem, addr);
-    return 1;
+    return 0;
 }
 
 int memory_load32_checked(Memory *mem, uint32_t addr, uint32_t *out) {
     if (!out || !memory_check_range(mem, addr, 4)) {
-        return 0;
+        return -1;
     }
     *out = memory_load32(mem, addr);
-    return 1;
+    return 0;
 }
 
 // ---- write ----
@@ -97,26 +97,26 @@ void memory_store32(Memory *mem, uint32_t addr, uint32_t value) {
 
 int memory_store8_checked(Memory *mem, uint32_t addr, uint8_t value) {
     if (!memory_check_range(mem, addr, 1)) {
-        return 0;
+        return -1;
     }
     memory_store8(mem, addr, value);
-    return 1;
+    return 0;
 }
 
 int memory_store16_checked(Memory *mem, uint32_t addr, uint16_t value) {
     if (!memory_check_range(mem, addr, 2)) {
-        return 0;
+        return -1;
     }
     memory_store16(mem, addr, value);
-    return 1;
+    return 0;
 }
 
 int memory_store32_checked(Memory *mem, uint32_t addr, uint32_t value) {
     if (!memory_check_range(mem, addr, 4)) {
-        return 0;
+        return -1;
     }
     memory_store32(mem, addr, value);
-    return 1;
+    return 0;
 }
 
 // ---- debug ----

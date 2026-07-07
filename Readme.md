@@ -370,6 +370,74 @@ MPIE    <- 1
 
 异常 cause code 见 `common.h` 的 `TrapCause` 枚举。
 
+## MMIO 与总线架构
+
+### MMIO（Memory-Mapped I/O）
+
+RISC-V 没有独立的访外设指令（如 x86 的 `in`/`out`）。所有外设寄存器被映射到物理地址空间上，CPU 对这段地址做 `load`/`store`，实际读写的是设备寄存器而非内存—— **MMIO**。
+
+对 CPU 而言，串口就是地址空间里的一个区域：往 `uart_base` 写一个字节，字符就发出去了。
+
+### 总线（Bus）
+
+Bus 是 CPU 和 RAM/设备之间的中间层，**唯一职责是按地址分发 load 和 store**：
+
+```text
+                            ┌─ 0x00000000 ≤ addr < ram_size  → Memory（RAM）
+CPU ── load/store ──► Bus ──┼─ UART_BASE ≤ addr < UART_END → UART
+                            ├─ Disk / CLINT / PLIC（后期）   → 对应设备
+                            └─ 未映射                         → load/store fault
+```
+
+Bus 持有 `Memory*` 和所有设备指针。`bus_load*`/`bus_store*` 判断地址落在哪个设备区间，转发给对应方。加新设备只需"往 Bus 注册一段地址"，不动现有代码。
+
+### 地址布局
+
+参考 QEMU `virt` 模型并简化，与真实 RISC-V 机器对齐以便日后交叉验证：
+
+| 地址范围 | 设备 | 说明 |
+|---|---|---|
+| `0x00000000` – `0x0FFFFFFF` | DRAM（RAM） | 主内存，大小可变 |
+| `0x02000000` – `0x0200FFFF` | CLINT | 核内局部中断控制器（定时器/软件中断，后续） |
+| `0x0C000000` – `0x0CFFFFFF` | PLIC | 平台级中断控制器（外部中断，后续） |
+| `0x10000000` – `0x100000FF` | UART | NS16550A 串口（**当前**） |
+| `0x10001000` – `0x10001FFF` | Disk | 块设备（后续） |
+
+> 当前 RAM 为 1 KB（`0x0`–`0x3ff`），后续支持传入大小参数。
+
+### UART 输出原理（NS16550A 简化）
+
+NS16550A 是极其经典的串口芯片，本项目只实现输出，**只需两个寄存器**：
+
+| 偏移 | 寄存器 | 作用 |
+|---|---|---|
+| `0x00` | THR（Transmit Holding） | 往这里写一个字节 = 发送该字符 |
+| `0x05` | LSR（Line Status） | `bit5` = THRE（发送器空闲），`1` 表示可以发下一个字节 |
+
+polling 输出流程：
+
+```text
+loop:
+    load8(uart_base + 5)    读 LSR
+    if bit5 == 1:           THRE 空闲
+        store8(uart_base, char)
+```
+
+简化实现：写 `THR`（偏移 0）直接 `putchar` 到宿主机终端；读 `LSR`（偏移 5）永远返回 `0x60`（`THRE=1`，`TEMT=1`），表示随时可发，不模拟真实延迟。
+
+### 项目路线图
+
+| 模块 | 内容 | 状态 |
+|---|---|---|
+| RV32I 指令集 | 基础整数指令（含 JALR） | ✅ |
+| 同步异常 | `raise_trap`、`mtvec`/`mepc`/`mcause`/`mtval` | ✅ |
+| CSR + mret | 6 条 Zicsr 指令 + `mstatus` 维护 + `mret`，trap 可进可出 | ✅ |
+| **MMIO + UART** | **Bus 路由层 + NS16550A 串口输出** | **← 当前** |
+| 异步中断 | `mie`/`mip` 检测、定时器/外部中断 | 计划 |
+| 硬盘（Disk） | 块设备读写 | 计划 |
+| 分页（MMU） | Sv32 两级页表、地址转换、TLB | 计划 |
+| 特权级 | S-mode / U-mode 切换、`sret` | 远期 |
+
 ## 程序停止约定
 
 当前虚拟 CPU 使用 RISC-V 标准 `EBREAK` 指令作为停机指令：

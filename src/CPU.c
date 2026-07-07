@@ -44,14 +44,14 @@ void Free_CPU(CPU* cpu){
     free(cpu);
 }
 
-void Run_CPU(CPU* cpu, Memory* mem) {
+void Run_CPU(CPU* cpu, Bus* bus) {
     while (!cpu->halted) {
         cpu->trap_pending = 0;
-        cpu->fetch(cpu, mem);
+        cpu->fetch(cpu, bus);
         if (cpu->trap_pending) {
             continue;
         }
-        cpu->execute(cpu, mem);
+        cpu->execute(cpu, bus);
     }
 }
 
@@ -75,39 +75,39 @@ void raise_trap(CPU *cpu, uint32_t cause, uint32_t tval) {
 }
 
 //------ CSR 访问 ------
-// 读：返回 1 表示存在并把值写到 *out；返回 0 表示不存在。
-// 写：返回 1 表示成功；返回 0 表示该 CSR 不存在或只读（调用方按
-//     illegal instruction 处理）。由 SYSTEM opcode 的 CSR 指令分支调用。
+// 返回值统一约定：0 = 成功；-1 = 失败（CSR 不存在或只读）。
+// 读成功时把值写到 *out；写失败时调用方按 illegal instruction 处理。
+// 由 SYSTEM opcode 的 CSR 指令分支调用。
 
 static int csr_read(CPU *cpu, uint32_t csr, uint32_t *out) {
     switch (csr) {
-        case CSR_MSTATUS:  *out = cpu->mstatus;  return 1;
-        case CSR_MISA:     *out = 0;             return 1;  // 最小实现不报告扩展
-        case CSR_MIE:      *out = cpu->mie;      return 1;
-        case CSR_MTVEC:    *out = cpu->mtvec;    return 1;
-        case CSR_MSCRATCH: *out = cpu->mscratch; return 1;
-        case CSR_MEPC:     *out = cpu->mepc;     return 1;
-        case CSR_MCAUSE:   *out = cpu->mcause;   return 1;
-        case CSR_MTVAL:    *out = cpu->mtval;    return 1;
-        case CSR_MIP:      *out = cpu->mip;      return 1;
-        case CSR_MHARTID:  *out = 0;             return 1;  // 单核 hart id = 0
-        default:           return 0;  // 不存在的 CSR
+        case CSR_MSTATUS:  *out = cpu->mstatus;  return 0;
+        case CSR_MISA:     *out = 0;             return 0;  // 最小实现不报告扩展
+        case CSR_MIE:      *out = cpu->mie;      return 0;
+        case CSR_MTVEC:    *out = cpu->mtvec;    return 0;
+        case CSR_MSCRATCH: *out = cpu->mscratch; return 0;
+        case CSR_MEPC:     *out = cpu->mepc;     return 0;
+        case CSR_MCAUSE:   *out = cpu->mcause;   return 0;
+        case CSR_MTVAL:    *out = cpu->mtval;    return 0;
+        case CSR_MIP:      *out = cpu->mip;      return 0;
+        case CSR_MHARTID:  *out = 0;             return 0;  // 单核 hart id = 0
+        default:           return -1;  // 不存在的 CSR
     }
 }
 
 static int csr_write(CPU *cpu, uint32_t csr, uint32_t val) {
     switch (csr) {
-        case CSR_MSTATUS:  cpu->mstatus  = val; return 1;
-        case CSR_MIE:      cpu->mie      = val; return 1;
-        case CSR_MTVEC:    cpu->mtvec    = val; return 1;
-        case CSR_MSCRATCH: cpu->mscratch = val; return 1;
-        case CSR_MEPC:     cpu->mepc     = val; return 1;
-        case CSR_MCAUSE:   cpu->mcause   = val; return 1;
-        case CSR_MTVAL:    cpu->mtval    = val; return 1;
-        case CSR_MIP:      cpu->mip      = val; return 1;  // 简化：不区分可写/只读位
-        case CSR_MISA:     return 0;  // 只读
-        case CSR_MHARTID:  return 0;  // 只读
-        default:           return 0;  // 不存在
+        case CSR_MSTATUS:  cpu->mstatus  = val; return 0;
+        case CSR_MIE:      cpu->mie      = val; return 0;
+        case CSR_MTVEC:    cpu->mtvec    = val; return 0;
+        case CSR_MSCRATCH: cpu->mscratch = val; return 0;
+        case CSR_MEPC:     cpu->mepc     = val; return 0;
+        case CSR_MCAUSE:   cpu->mcause   = val; return 0;
+        case CSR_MTVAL:    cpu->mtval    = val; return 0;
+        case CSR_MIP:      cpu->mip      = val; return 0;  // 简化：不区分可写/只读位
+        case CSR_MISA:     return -1;  // 只读
+        case CSR_MHARTID:  return -1;  // 只读
+        default:           return -1;  // 不存在
     }
 }
 
@@ -148,7 +148,7 @@ static int32_t imm_j(uint32_t inst) {
 }
 
 
-void Fetch(CPU *cpu, Memory *mem) {
+void Fetch(CPU *cpu, Bus *bus) {
     uint32_t inst;
     uint32_t fault_pc = cpu->pc;
 
@@ -157,7 +157,7 @@ void Fetch(CPU *cpu, Memory *mem) {
         return;
     }
 
-    if (!memory_load32_checked(mem, cpu->pc, &inst)) {
+    if (bus_load32(bus, cpu->pc, &inst) != 0) {
         raise_trap_at(cpu, TRAP_INST_FAULT, cpu->pc, fault_pc);
         return;
     }
@@ -166,7 +166,7 @@ void Fetch(CPU *cpu, Memory *mem) {
     cpu->pc += 4;
 }
 
-void Execute(CPU *cpu, Memory *mem) {
+void Execute(CPU *cpu, Bus *bus) {
     if (cpu->halted) {
         return;
     }
@@ -236,7 +236,7 @@ void Execute(CPU *cpu, Memory *mem) {
             switch (funct3) {
                 case 0b000: { // LB
                     uint8_t value;
-                    if (!memory_load8_checked(mem, cpu->addr, &value)) {
+                    if (bus_load8(bus, cpu->addr, &value) != 0) {
                         raise_trap(cpu, TRAP_LOAD_FAULT, cpu->addr);
                         return;
                     }
@@ -249,7 +249,7 @@ void Execute(CPU *cpu, Memory *mem) {
                         raise_trap(cpu, TRAP_LOAD_MISALIGNED, cpu->addr);
                         return;
                     }
-                    if (!memory_load16_checked(mem, cpu->addr, &value)) {
+                    if (bus_load16(bus, cpu->addr, &value) != 0) {
                         raise_trap(cpu, TRAP_LOAD_FAULT, cpu->addr);
                         return;
                     }
@@ -262,7 +262,7 @@ void Execute(CPU *cpu, Memory *mem) {
                         raise_trap(cpu, TRAP_LOAD_MISALIGNED, cpu->addr);
                         return;
                     }
-                    if (!memory_load32_checked(mem, cpu->addr, &value)) {
+                    if (bus_load32(bus, cpu->addr, &value) != 0) {
                         raise_trap(cpu, TRAP_LOAD_FAULT, cpu->addr);
                         return;
                     }
@@ -271,7 +271,7 @@ void Execute(CPU *cpu, Memory *mem) {
                 }
                 case 0b100: { // LBU
                     uint8_t value;
-                    if (!memory_load8_checked(mem, cpu->addr, &value)) {
+                    if (bus_load8(bus, cpu->addr, &value) != 0) {
                         raise_trap(cpu, TRAP_LOAD_FAULT, cpu->addr);
                         return;
                     }
@@ -284,7 +284,7 @@ void Execute(CPU *cpu, Memory *mem) {
                         raise_trap(cpu, TRAP_LOAD_MISALIGNED, cpu->addr);
                         return;
                     }
-                    if (!memory_load16_checked(mem, cpu->addr, &value)) {
+                    if (bus_load16(bus, cpu->addr, &value) != 0) {
                         raise_trap(cpu, TRAP_LOAD_FAULT, cpu->addr);
                         return;
                     }
@@ -301,7 +301,7 @@ void Execute(CPU *cpu, Memory *mem) {
             cpu->addr = cpu->reg[rs1] + (uint32_t)imm_s(cpu->inst);
             switch (funct3) {
                 case 0b000: // SB
-                    if (!memory_store8_checked(mem, cpu->addr, (uint8_t)(cpu->reg[rs2] & 0xFF))) {
+                    if (bus_store8(bus, cpu->addr, (uint8_t)(cpu->reg[rs2] & 0xFF)) != 0) {
                         raise_trap(cpu, TRAP_STORE_FAULT, cpu->addr);
                         return;
                     }
@@ -311,7 +311,7 @@ void Execute(CPU *cpu, Memory *mem) {
                         raise_trap(cpu, TRAP_STORE_MISALIGNED, cpu->addr);
                         return;
                     }
-                    if (!memory_store16_checked(mem, cpu->addr, (uint16_t)(cpu->reg[rs2] & 0xFFFF))) {
+                    if (bus_store16(bus, cpu->addr, (uint16_t)(cpu->reg[rs2] & 0xFFFF)) != 0) {
                         raise_trap(cpu, TRAP_STORE_FAULT, cpu->addr);
                         return;
                     }
@@ -321,7 +321,7 @@ void Execute(CPU *cpu, Memory *mem) {
                         raise_trap(cpu, TRAP_STORE_MISALIGNED, cpu->addr);
                         return;
                     }
-                    if (!memory_store32_checked(mem, cpu->addr, cpu->reg[rs2])) {
+                    if (bus_store32(bus, cpu->addr, cpu->reg[rs2]) != 0) {
                         raise_trap(cpu, TRAP_STORE_FAULT, cpu->addr);
                         return;
                     }
@@ -417,25 +417,25 @@ void Execute(CPU *cpu, Memory *mem) {
                 // bit2=0 寄存器版：源操作数取 reg[rs1]。
                 uint32_t src = (funct3 & 0b100) ? rs1 : cpu->reg[rs1];
                 uint32_t old;
-                if (!csr_read(cpu, csr, &old)) {                   // 访问不存在的 CSR
+                if (csr_read(cpu, csr, &old) != 0) {                   // 访问不存在的 CSR
                     raise_trap(cpu, TRAP_ILLEGAL_INST, cpu->inst);
                     return;
                 }
                 switch (funct3 & 0b011) {
                     case 0b01: // CSRRW / CSRRWI —— 总是写
-                        if (!csr_write(cpu, csr, src)) {
+                        if (csr_write(cpu, csr, src) != 0) {
                             raise_trap(cpu, TRAP_ILLEGAL_INST, cpu->inst);
                             return;
                         }
                         break;
                     case 0b10: // CSRRS / CSRRSI —— rs1==0 不写
-                        if (rs1 != 0 && !csr_write(cpu, csr, old | src)) {
+                        if (rs1 != 0 && csr_write(cpu, csr, old | src) != 0) {
                             raise_trap(cpu, TRAP_ILLEGAL_INST, cpu->inst);
                             return;
                         }
                         break;
                     case 0b11: // CSRRC / CSRRCI —— rs1==0 不写
-                        if (rs1 != 0 && !csr_write(cpu, csr, old & ~src)) {
+                        if (rs1 != 0 && csr_write(cpu, csr, old & ~src) != 0) {
                             raise_trap(cpu, TRAP_ILLEGAL_INST, cpu->inst);
                             return;
                         }
